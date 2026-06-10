@@ -53,7 +53,7 @@ internal class EventQueue {
      */
     fun enqueue(event: AnalyticsEvent): Boolean = synchronized(lock) {
         events.add(event)
-        while (events.size > MAX_QUEUED) events.removeAt(0)
+        if (events.size > MAX_QUEUED) events.removeAt(0)
         events.size >= FLUSH_THRESHOLD
     }
 
@@ -64,11 +64,13 @@ internal class EventQueue {
         drained
     }
 
-    /** Puts failed events back at the front (preserving order), capped at MAX_QUEUED. */
-    fun requeue(failed: List<AnalyticsEvent>) = synchronized(lock) {
+    /** Puts failed events back at the front, capped at MAX_QUEUED. @return how many were shed by the cap. */
+    fun requeue(failed: List<AnalyticsEvent>): Int = synchronized(lock) {
         val combined = failed + events
         events.clear()
-        events.addAll(if (combined.size <= MAX_QUEUED) combined else combined.takeLast(MAX_QUEUED))
+        val shed = (combined.size - MAX_QUEUED).coerceAtLeast(0)
+        events.addAll(if (shed == 0) combined else combined.takeLast(MAX_QUEUED))
+        shed
     }
 
     fun count(): Int = synchronized(lock) { events.size }

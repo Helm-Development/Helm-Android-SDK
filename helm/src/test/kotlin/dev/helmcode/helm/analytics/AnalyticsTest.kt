@@ -76,4 +76,15 @@ class AnalyticsTest {
         analytics.track("once")
         assertEquals(1, analytics.queuedEventCount())
     }
+
+    @Test
+    fun headersAreEmptyBeforeStart() {
+        val analytics = Analytics(
+            installationStore = null,
+            identityStore = null,
+            sessionManager = SessionManager(),
+            queue = EventQueue(),
+        )
+        assertEquals(emptyMap<String, String>(), analytics.headers())
+    }
 }

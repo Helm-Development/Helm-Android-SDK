@@ -1,6 +1,8 @@
 package dev.helmcode.helm.analytics
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -58,6 +60,7 @@ class Analytics internal constructor(
     }
 
     // Single scope — one flush loop ever; guarded by stateLock check-and-set.
+    // Process-lifetime SupervisorJob scope: intentionally never cancelled (singleton).
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateLock = Any()
 
@@ -75,19 +78,16 @@ class Analytics internal constructor(
             Log.w(TAG, "start() before Helm.configure(...) — ignored")
             return
         }
-        // Capture stores and facts needed outside the lock.
-        val shouldStart: Boolean
         synchronized(stateLock) {
             if (started) return
             started = true
-            shouldStart = true
             val backing = SharedPrefsStore(context)
             if (installationStore == null) installationStore = InstallationStore(backing)
             if (identityStore == null) identityStore = IdentityStore(backing)
             if (deviceFacts == null) deviceFacts = DeviceFacts.collect(context)
         }
-        // observeLifecycle touches ProcessLifecycleOwner (must be main thread) and
-        // is called OUTSIDE stateLock to avoid holding the lock during registration.
+        // observeLifecycle posts to the main thread itself; it and the network-bound
+        // calls below run OUTSIDE stateLock to avoid holding the lock while blocking.
         observeLifecycle()
         startFlushLoop()
         register()
@@ -95,12 +95,13 @@ class Analytics internal constructor(
 
     /** Bind the user identity from the login response's helm_user_hash. */
     fun identify(userHash: String) {
-        synchronized(stateLock) {
-            identityStore?.store(userHash) ?: run {
+        val store = synchronized(stateLock) {
+            identityStore ?: run {
                 Log.w(TAG, "identify() before start() — ignored")
                 return
             }
         }
+        store.store(userHash)
         if (started) register() // re-registration binds the hash server-side
     }
 
@@ -109,7 +110,8 @@ class Analytics internal constructor(
      * to its last-known user (spec §5).
      */
     fun clearIdentity() {
-        synchronized(stateLock) { identityStore?.clear() }
+        val store = synchronized(stateLock) { identityStore ?: return }
+        store.clear()
     }
 
     /** Queue a custom event. Flushes automatically at 50 events / 30 s / background. */
@@ -201,7 +203,8 @@ class Analytics internal constructor(
         if (retryable.size < batch.size) {
             Log.w(TAG, "dropped ${batch.size - retryable.size} events after second failure")
         }
-        queue.requeue(retryable)
+        val shed = queue.requeue(retryable)
+        if (shed > 0) Log.w(TAG, "queue cap shed $shed events during requeue")
     }
 
     private fun startFlushLoop() {
@@ -214,15 +217,18 @@ class Analytics internal constructor(
     }
 
     private fun observeLifecycle() {
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStop(owner: LifecycleOwner) {
-                sessionManager.appDidEnterBackground()
-                flush() // flush-on-background durability (spec §2)
-            }
+        // LifecycleRegistry.addObserver enforces the main thread — hop defensively.
+        Handler(Looper.getMainLooper()).post {
+            ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+                override fun onStop(owner: LifecycleOwner) {
+                    sessionManager.appDidEnterBackground()
+                    flush() // flush-on-background durability (spec §2)
+                }
 
-            override fun onStart(owner: LifecycleOwner) {
-                sessionManager.appWillEnterForeground()
-            }
-        })
+                override fun onStart(owner: LifecycleOwner) {
+                    sessionManager.appWillEnterForeground()
+                }
+            })
+        }
     }
 }

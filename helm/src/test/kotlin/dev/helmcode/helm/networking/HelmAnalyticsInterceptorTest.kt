@@ -13,23 +13,26 @@ class HelmAnalyticsInterceptorTest {
     @Test
     fun stampsHeadersFromProvider() {
         val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(200))
-        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(200))
+            server.start()
 
-        val client = OkHttpClient.Builder()
-            .addInterceptor(HelmAnalyticsInterceptor(headersProvider = {
-                mapOf(
-                    "X-Helm-Installation-Id" to "iid-123",
-                    "X-Helm-Session-Id" to "sid-456",
-                )
-            }))
-            .build()
-        client.newCall(Request.Builder().url(server.url("/api/")).build()).execute()
+            val client = OkHttpClient.Builder()
+                .addInterceptor(HelmAnalyticsInterceptor(headersProvider = {
+                    mapOf(
+                        "X-Helm-Installation-Id" to "iid-123",
+                        "X-Helm-Session-Id" to "sid-456",
+                    )
+                }))
+                .build()
+            client.newCall(Request.Builder().url(server.url("/api/")).build()).execute()
 
-        val recorded = server.takeRequest()
-        assertEquals("iid-123", recorded.getHeader("X-Helm-Installation-Id"))
-        assertEquals("sid-456", recorded.getHeader("X-Helm-Session-Id"))
-        assertNotNull(recorded)
-        server.shutdown()
+            val recorded = server.takeRequest()
+            assertEquals("iid-123", recorded.getHeader("X-Helm-Installation-Id"))
+            assertEquals("sid-456", recorded.getHeader("X-Helm-Session-Id"))
+            assertNotNull(recorded)
+        } finally {
+            server.shutdown()
+        }
     }
 }
