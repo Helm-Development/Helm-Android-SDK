@@ -1,5 +1,6 @@
 package dev.helmcode.helm
 
+import dev.helmcode.helm.analytics.Analytics
 import dev.helmcode.helm.attribution.Attribution
 
 /**
@@ -29,4 +30,11 @@ object Helm {
      */
     val attribution: Attribution
         get() = Attribution.instance
+
+    /**
+     * Access the product analytics module. Call Helm.analytics.start(context)
+     * after configure to begin installation/session/event tracking.
+     */
+    val analytics: Analytics
+        get() = Analytics.instance
 }

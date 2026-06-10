@@ -8,6 +8,6 @@ internal data class Configuration(
     val baseURL: String
 ) {
     companion object {
-        var instance: Configuration? = null
+        @Volatile var instance: Configuration? = null
     }
 }
