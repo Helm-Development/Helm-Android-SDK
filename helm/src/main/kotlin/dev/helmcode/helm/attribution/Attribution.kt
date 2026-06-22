@@ -3,6 +3,7 @@ package dev.helmcode.helm.attribution
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import dev.helmcode.helm.analytics.Analytics
 import dev.helmcode.helm.networking.HelmHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -105,6 +106,7 @@ class Attribution internal constructor() {
             val attributionId = response["attribution_id"] as? String
             if (attributionId != null) {
                 AttributionStore.storeMatch(context, attributionId)
+                Analytics.instance.onAttributionMatched(attributionId)
             } else {
                 AttributionStore.storeUnmatched(context)
             }
@@ -132,6 +134,7 @@ class Attribution internal constructor() {
 
         if (!attributionId.isNullOrEmpty()) {
             AttributionStore.storeMatch(context, attributionId)
+            Analytics.instance.onAttributionMatched(attributionId)
         } else {
             AttributionStore.storeUnmatched(context)
         }
