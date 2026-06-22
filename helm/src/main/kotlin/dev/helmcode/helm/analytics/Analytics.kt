@@ -8,6 +8,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.helmcode.helm.Configuration
+import dev.helmcode.helm.attribution.AttributionStore
 import dev.helmcode.helm.networking.HelmError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,8 @@ import kotlinx.coroutines.launch
  * check-and-set in start() ensures only one flush loop ever starts.
  * [observeLifecycle] and network calls are invoked OUTSIDE [stateLock] to avoid
  * holding the lock during potentially blocking operations.
+ * [attributionToken] is @Volatile; onAttributionMatched writes it without stateLock
+ * (same pattern as identify's re-register).
  */
 class Analytics internal constructor(
     private var installationStore: InstallationStore?,
@@ -66,6 +69,7 @@ class Analytics internal constructor(
 
     @Volatile private var started = false
     private var deviceFacts: DeviceFacts? = deviceFactsOverride
+    @Volatile private var attributionToken: String? = null
 
     /**
      * Activates analytics: binds persistence, registers the installation with
@@ -85,6 +89,7 @@ class Analytics internal constructor(
             if (installationStore == null) installationStore = InstallationStore(DeviceIdStore(backing))
             if (identityStore == null) identityStore = IdentityStore(backing)
             if (deviceFacts == null) deviceFacts = DeviceFacts.collect(context)
+            attributionToken = AttributionStore.getAttributionId(context)
         }
         // observeLifecycle posts to the main thread itself; it and the network-bound
         // calls below run OUTSIDE stateLock to avoid holding the lock while blocking.
@@ -113,6 +118,18 @@ class Analytics internal constructor(
         val store = synchronized(stateLock) { identityStore ?: return }
         store.clear()
     }
+
+    /**
+     * Called by the attribution module when an install is matched to a tracking link.
+     * Stores the attribution_token and (if started) re-registers so the backend
+     * closes the Attribution -> Installation join. Robust to launch ordering.
+     */
+    internal fun onAttributionMatched(token: String?) {
+        attributionToken = token?.takeIf { it.isNotEmpty() }
+        if (started) register()
+    }
+
+    internal fun attributionTokenForTest(): String? = attributionToken
 
     /** Queue a custom event. Flushes automatically at 50 events / 30 s / background. */
     fun track(name: String, properties: Map<String, Any?> = emptyMap()) {
@@ -172,7 +189,7 @@ class Analytics internal constructor(
         val device = facts ?: return
         scope.launch {
             try {
-                AnalyticsClient.registerInstallation(installationId, userHash, device)
+                AnalyticsClient.registerInstallation(installationId, userHash, device, attributionToken)
             } catch (e: Exception) {
                 // Registration retries on next launch; never surfaces (spec §6).
                 Log.e(TAG, "registration failed: ${e.message}")
