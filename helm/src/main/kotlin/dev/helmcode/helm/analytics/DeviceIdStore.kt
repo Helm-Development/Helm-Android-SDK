@@ -12,9 +12,9 @@ import java.util.UUID
  *   2. legacy attribution device id        -> adopt (upgrade continuity)
  *   3. mint a new lowercase UUIDv4
  *
- * Thread-safety: [deviceId] is @Synchronized so first-launch races cannot mint two ids.
- * Use a single shared instance per process: [deviceId]'s lock is instance-scoped,
- * so concurrent first-reads are only race-free through one shared instance.
+ * Thread-safety: [deviceId] serializes on a process-wide [LOCK], so even separate
+ * instances over the same backing prefs (analytics + attribution both resolve at
+ * launch on background threads) cannot mint divergent ids on first read.
  */
 internal class DeviceIdStore(
     private val store: KeyValueStore,
@@ -22,17 +22,17 @@ internal class DeviceIdStore(
 ) {
     private companion object {
         const val KEY = "helm_installation_id"
+        val LOCK = Any()
     }
 
-    @Synchronized
-    fun deviceId(): String {
-        store.get(KEY)?.takeIf { it.isNotEmpty() }?.let { return it }
+    fun deviceId(): String = synchronized(LOCK) {
+        store.get(KEY)?.takeIf { it.isNotEmpty() }?.let { return@synchronized it }
         legacyAttributionDeviceId()?.takeIf { it.isNotEmpty() }?.let { legacy ->
             store.put(KEY, legacy)
-            return legacy
+            return@synchronized legacy
         }
         val minted = UUID.randomUUID().toString().lowercase()
         store.put(KEY, minted)
-        return minted
+        minted
     }
 }
