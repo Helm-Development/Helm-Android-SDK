@@ -1,7 +1,8 @@
 package dev.helmcode.helm.attribution
 
 import android.content.Context
-import java.util.UUID
+import dev.helmcode.helm.analytics.DeviceIdStore
+import dev.helmcode.helm.analytics.SharedPrefsStore
 
 /**
  * Persistent storage for attribution state using SharedPreferences.
@@ -56,20 +57,18 @@ internal object AttributionStore {
     }
 
     /**
-     * Get or create a persistent device ID (UUID).
-     * Generated once on first call, then persisted in SharedPreferences.
+     * Returns the shared device id (HELM-202). Reads/creates via [DeviceIdStore],
+     * seeding from this module's legacy `helm_device_id` for upgrade continuity.
      */
     fun getOrCreateDeviceId(context: Context): String {
-        val existing = prefs(context).getString(KEY_DEVICE_ID, null)
-        if (!existing.isNullOrEmpty()) {
-            return existing
-        }
+        val canonical = SharedPrefsStore(context)
+        return DeviceIdStore(canonical) { peekLegacyDeviceId(context) }.deviceId()
+    }
 
-        val deviceId = UUID.randomUUID().toString()
-        prefs(context).edit()
-            .putString(KEY_DEVICE_ID, deviceId)
-            .apply()
-        return deviceId
+    /** Legacy attribution device id, read-only (no creation). Null if never set. */
+    fun peekLegacyDeviceId(context: Context): String? {
+        val value = prefs(context).getString(KEY_DEVICE_ID, null)
+        return if (value.isNullOrEmpty()) null else value
     }
 
     private fun prefs(context: Context) =

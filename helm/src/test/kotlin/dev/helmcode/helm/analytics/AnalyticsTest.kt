@@ -16,7 +16,7 @@ class AnalyticsTest {
     private fun makeAnalytics(): Analytics {
         val backing = InMemoryStore()
         return Analytics(
-            installationStore = InstallationStore(backing),
+            installationStore = InstallationStore(DeviceIdStore(backing)),
             identityStore = IdentityStore(backing),
             sessionManager = SessionManager(),
             queue = EventQueue(),
@@ -86,5 +86,28 @@ class AnalyticsTest {
             queue = EventQueue(),
         )
         assertEquals(emptyMap<String, String>(), analytics.headers())
+    }
+
+    @Test
+    fun onAttributionMatchedStoresTokenForRegistration() {
+        val analytics = makeAnalytics()
+        analytics.startForTest()
+        analytics.onAttributionMatched("attr-xyz")
+        assertEquals("attr-xyz", analytics.attributionTokenForTest())
+    }
+
+    @Test
+    fun onAttributionMatchedIgnoresEmptyToken() {
+        val analytics = makeAnalytics()
+        analytics.startForTest()
+        analytics.onAttributionMatched("")
+        assertNull(analytics.attributionTokenForTest())
+    }
+
+    @Test
+    fun onAttributionMatchedBeforeStartStoresToken() {
+        val analytics = makeAnalytics()
+        analytics.onAttributionMatched("attr-early")
+        assertEquals("attr-early", analytics.attributionTokenForTest())
     }
 }

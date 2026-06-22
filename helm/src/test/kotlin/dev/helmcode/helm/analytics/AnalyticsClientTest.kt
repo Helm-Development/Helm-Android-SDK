@@ -30,6 +30,25 @@ class AnalyticsClientTest {
     }
 
     @Test
+    fun registrationBodyIncludesAttributionTokenWhenPresent() {
+        val body = AnalyticsClient.registrationBody(
+            installationId = "iid",
+            userHash = "",
+            device = device,
+            attributionToken = "attr-abc",
+        )
+        assertEquals("attr-abc", body["attribution_token"])
+    }
+
+    @Test
+    fun registrationBodyOmitsAttributionTokenWhenNullOrEmpty() {
+        val nullToken = AnalyticsClient.registrationBody("iid", "", device, null)
+        val emptyToken = AnalyticsClient.registrationBody("iid", "", device, "")
+        assertFalse(nullToken.containsKey("attribution_token"))
+        assertFalse(emptyToken.containsKey("attribution_token"))
+    }
+
+    @Test
     fun eventsBodyShape() {
         val event = AnalyticsEvent("tapped", 1_700_000_000_000L, "s")
         val body = AnalyticsClient.eventsBody("iid", listOf(event))
