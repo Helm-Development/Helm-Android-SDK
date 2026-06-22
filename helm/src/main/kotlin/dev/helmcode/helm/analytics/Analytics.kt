@@ -82,7 +82,7 @@ class Analytics internal constructor(
             if (started) return
             started = true
             val backing = SharedPrefsStore(context)
-            if (installationStore == null) installationStore = InstallationStore(backing)
+            if (installationStore == null) installationStore = InstallationStore(DeviceIdStore(backing))
             if (identityStore == null) identityStore = IdentityStore(backing)
             if (deviceFacts == null) deviceFacts = DeviceFacts.collect(context)
         }

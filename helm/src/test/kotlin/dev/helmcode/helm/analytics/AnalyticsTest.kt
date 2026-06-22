@@ -16,7 +16,7 @@ class AnalyticsTest {
     private fun makeAnalytics(): Analytics {
         val backing = InMemoryStore()
         return Analytics(
-            installationStore = InstallationStore(backing),
+            installationStore = InstallationStore(DeviceIdStore(backing)),
             identityStore = IdentityStore(backing),
             sessionManager = SessionManager(),
             queue = EventQueue(),

@@ -17,7 +17,7 @@ class StoresTest {
 
     @Test
     fun installationIdIsLowercaseUuidGeneratedOnce() {
-        val store = InstallationStore(InMemoryStore())
+        val store = InstallationStore(DeviceIdStore(InMemoryStore()))
         val id = store.installationId()
         assertNotNull(UUID.fromString(id))
         assertEquals(id, id.lowercase())
@@ -27,8 +27,9 @@ class StoresTest {
     @Test
     fun installationIdPersistsAcrossInstances() {
         val backing = InMemoryStore()
-        assertEquals(InstallationStore(backing).installationId(),
-                     InstallationStore(backing).installationId())
+        // two store instances over one backing store: verifies persistence, not concurrent-mint safety
+        assertEquals(InstallationStore(DeviceIdStore(backing)).installationId(),
+                     InstallationStore(DeviceIdStore(backing)).installationId())
     }
 
     @Test
