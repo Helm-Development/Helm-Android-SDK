@@ -42,15 +42,21 @@ internal object AnalyticsClient {
 
     // payload builders (pure, unit-tested)
 
-    fun registrationBody(installationId: String, userHash: String, device: DeviceFacts): Map<String, Any?> = mapOf(
-        "installation_id" to installationId,
-        "platform" to device.platform,
-        "app_version" to device.appVersion,
-        "os_version" to device.osVersion,
-        "locale" to device.locale,
-        "timezone" to device.timezone,
-        "user_hash" to userHash,
-    )
+    fun registrationBody(
+        installationId: String,
+        userHash: String,
+        device: DeviceFacts,
+        attributionToken: String? = null,
+    ): Map<String, Any?> = buildMap {
+        put("installation_id", installationId)
+        put("platform", device.platform)
+        put("app_version", device.appVersion)
+        put("os_version", device.osVersion)
+        put("locale", device.locale)
+        put("timezone", device.timezone)
+        put("user_hash", userHash)
+        attributionToken?.takeIf { it.isNotEmpty() }?.let { put("attribution_token", it) }
+    }
 
     fun eventsBody(installationId: String, events: List<AnalyticsEvent>): Map<String, Any?> = mapOf(
         "installation_id" to installationId,
@@ -63,10 +69,15 @@ internal object AnalyticsClient {
      * Register (or re-register) this installation. userHash may be "" when anonymous;
      * the SDK always echoes its stored hash so identity never regresses (spec §5).
      */
-    suspend fun registerInstallation(installationId: String, userHash: String, device: DeviceFacts) {
+    suspend fun registerInstallation(
+        installationId: String,
+        userHash: String,
+        device: DeviceFacts,
+        attributionToken: String? = null,
+    ) {
         HelmHttpClient.post(
             path = "/api/v1/analytics/installations/",
-            body = registrationBody(installationId, userHash, device),
+            body = registrationBody(installationId, userHash, device, attributionToken),
         )
     }
 
