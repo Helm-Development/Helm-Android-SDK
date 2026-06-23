@@ -24,6 +24,12 @@ class Attribution internal constructor() {
         private const val TAG = "HelmSDK"
 
         internal val instance: Attribution by lazy { Attribution() }
+
+        // Backend routes (apps/client_api/urls.py, included at /api/). Must match
+        // the iOS SDK and the Helm backend exactly, or attribution requests 404.
+        internal const val PATH_REFERRER = "/api/client/v1/attribution/referrer/"
+        internal const val PATH_MATCH = "/api/client/v1/attribution/match/"
+        internal const val PATH_EVENT = "/api/client/v1/attribution/event/"
     }
 
     /**
@@ -95,14 +101,14 @@ class Attribution internal constructor() {
         }
 
         if (referrerResult != null) {
-            // Referrer matched Helm -- POST to /attribution/referrer/
+            // Referrer matched Helm -- POST to /api/client/v1/attribution/referrer/
             val body = mutableMapOf<String, Any?>(
                 "tracking_link_id" to referrerResult.trackingLinkId,
                 "device_id" to deviceId
             )
             referrerResult.tokenSlug?.let { body["referral_token_slug"] = it }
 
-            val response = HelmHttpClient.post("/attribution/referrer/", body)
+            val response = HelmHttpClient.post(PATH_REFERRER, body)
             val attributionId = response["attribution_id"] as? String
             if (attributionId != null) {
                 AttributionStore.storeMatch(context, attributionId)
@@ -129,7 +135,7 @@ class Attribution internal constructor() {
             "device_id" to deviceId
         )
 
-        val response = HelmHttpClient.post("/attribution/match/", body)
+        val response = HelmHttpClient.post(PATH_MATCH, body)
         val attributionId = response["attribution_id"] as? String
 
         if (!attributionId.isNullOrEmpty()) {
@@ -161,6 +167,6 @@ class Attribution internal constructor() {
         }
         body["attribution_id"] = attributionId
 
-        HelmHttpClient.post("/attribution/event/", body)
+        HelmHttpClient.post(PATH_EVENT, body)
     }
 }
