@@ -20,24 +20,24 @@ class AttributionStoreTest {
     fun `Configuration data class holds publishableKey and baseURL`() {
         val config = Configuration(
             publishableKey = "pk_test_123",
-            baseURL = "https://api.helmcode.dev"
+            baseURL = "https://helmcode.dev"
         )
 
         assertEquals("pk_test_123", config.publishableKey)
-        assertEquals("https://api.helmcode.dev", config.baseURL)
+        assertEquals("https://helmcode.dev", config.baseURL)
     }
 
     @Test
     fun `Configuration data class supports copy`() {
         val config = Configuration(
             publishableKey = "pk_test_123",
-            baseURL = "https://api.helmcode.dev"
+            baseURL = "https://helmcode.dev"
         )
 
-        val updated = config.copy(baseURL = "https://staging.helmcode.dev")
+        val updated = config.copy(baseURL = "https://helmcode.dev/staging")
 
         assertEquals("pk_test_123", updated.publishableKey)
-        assertEquals("https://staging.helmcode.dev", updated.baseURL)
+        assertEquals("https://helmcode.dev/staging", updated.baseURL)
     }
 
     @Test
@@ -51,7 +51,7 @@ class AttributionStoreTest {
     fun `Configuration companion object stores instance`() {
         val config = Configuration(
             publishableKey = "pk_live_abc",
-            baseURL = "https://api.helmcode.dev"
+            baseURL = "https://helmcode.dev"
         )
         Configuration.instance = config
 

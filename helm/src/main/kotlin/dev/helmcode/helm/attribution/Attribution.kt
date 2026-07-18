@@ -1,7 +1,6 @@
 package dev.helmcode.helm.attribution
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import dev.helmcode.helm.analytics.Analytics
 import dev.helmcode.helm.networking.HelmHttpClient
@@ -14,7 +13,7 @@ import kotlinx.coroutines.launch
  *
  * On first launch, [match] attempts to attribute the install via:
  * 1. Google Play Install Referrer (if utm_source=helm)
- * 2. Fingerprint matching (IP + user agent)
+ * 2. Fingerprint matching (screen size, pixel ratio, timezone, locale, OS version)
  *
  * After attribution, use [increment] to track conversion events.
  */
@@ -30,6 +29,17 @@ class Attribution internal constructor() {
         internal const val PATH_REFERRER = "/api/client/v1/attribution/referrer/"
         internal const val PATH_MATCH = "/api/client/v1/attribution/match/"
         internal const val PATH_EVENT = "/api/client/v1/attribution/event/"
+
+        /**
+         * Build the POST body for [PATH_MATCH]: the six scored fingerprint
+         * signals plus the device id the server stamps onto the Attribution.
+         *
+         * Deliberately contains no "ip" or "user_agent" -- the backend does not
+         * score either, and the IP lookup was an external round trip whose
+         * failure aborted the whole match.
+         */
+        internal fun buildMatchBody(signals: DeviceSignals, deviceId: String): Map<String, Any?> =
+            signals.toMap() + mapOf("device_id" to deviceId)
     }
 
     /**
@@ -120,20 +130,11 @@ class Attribution internal constructor() {
         }
 
         // 2. Fingerprint path
-        val ip = try {
-            IPResolver.fetchPublicIP()
-        } catch (e: Exception) {
-            Log.w(TAG, "IP resolution failed: ${e.message}", e)
-            throw e
-        }
-
-        val userAgent = "Helm-Android-SDK/1.0 Android/${Build.VERSION.RELEASE}"
-
-        val body = mapOf<String, Any?>(
-            "ip" to ip,
-            "user_agent" to userAgent,
-            "device_id" to deviceId
-        )
+        //
+        // Only the six signals the backend actually scores are sent. IP and
+        // user agent are NOT scored server-side (Safari clicks over IPv6, the
+        // SDK over IPv4), so sending them scored 0 and never matched.
+        val body = buildMatchBody(DeviceSignals.collect(context), deviceId)
 
         val response = HelmHttpClient.post(PATH_MATCH, body)
         val attributionId = response["attribution_id"] as? String

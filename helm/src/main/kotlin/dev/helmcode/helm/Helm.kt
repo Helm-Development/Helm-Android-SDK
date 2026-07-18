@@ -8,7 +8,7 @@ import dev.helmcode.helm.attribution.Attribution
  *
  * Usage:
  * ```
- * Helm.configure(publishableKey = "pk_...", baseURL = "https://api.helmcode.dev")
+ * Helm.configure(publishableKey = "pk_...", baseURL = "https://helmcode.dev")
  * Helm.attribution.match(context)
  * ```
  */
@@ -19,7 +19,7 @@ object Helm {
      * Must be called before using any other SDK features.
      *
      * @param publishableKey Your Helm publishable key (starts with "pk_")
-     * @param baseURL The base URL of your Helm API (e.g. "https://api.helmcode.dev")
+     * @param baseURL The base URL of your Helm API (e.g. "https://helmcode.dev")
      */
     fun configure(publishableKey: String, baseURL: String) {
         Configuration.instance = Configuration(publishableKey, baseURL)
