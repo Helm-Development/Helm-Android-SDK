@@ -40,6 +40,11 @@ dependencies {
     compileOnly("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Real org.json implementation. android.jar's org.json is stubbed and, with
+    // unitTests.isReturnDefaultValues = true, silently returns null instead of
+    // throwing -- so every JSON round trip in main source (HelmHttpClient, the
+    // attribution stores) would NPE under unit test without this.
+    testImplementation("org.json:json:20231013")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
     testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
@@ -52,7 +57,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.Helm-Development"
                 artifactId = "Helm-Android-SDK"
-                version = project.findProperty("VERSION_NAME") as String? ?: "0.2.0"
+                version = project.findProperty("VERSION_NAME") as String? ?: "0.5.0"
             }
         }
     }
