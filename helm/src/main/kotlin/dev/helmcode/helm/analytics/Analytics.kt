@@ -8,6 +8,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.helmcode.helm.Configuration
+import dev.helmcode.helm.attribution.Attribution
 import dev.helmcode.helm.attribution.AttributionStore
 import dev.helmcode.helm.networking.HelmError
 import kotlinx.coroutines.CoroutineScope
@@ -113,8 +114,13 @@ class Analytics internal constructor(
     /**
      * Drop the identity on logout. The installation stays bound server-side
      * to its last-known user (spec §5).
+     *
+     * Also wipes the influencer-attribution queue and status cache: both are
+     * keyed by the departing user and must not leak to the next one. The
+     * install-match state and device id survive -- they describe the device.
      */
     fun clearIdentity() {
+        Attribution.instance.onIdentityCleared()
         val store = synchronized(stateLock) { identityStore ?: return }
         store.clear()
     }

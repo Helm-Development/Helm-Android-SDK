@@ -1,8 +1,17 @@
 package dev.helmcode.helm.attribution
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import dev.helmcode.helm.AttributionStatus
+import dev.helmcode.helm.HelmResult
+import dev.helmcode.helm.PromoCodeLink
 import dev.helmcode.helm.analytics.Analytics
+import dev.helmcode.helm.analytics.SharedPrefsStore
 import dev.helmcode.helm.networking.HelmHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +25,19 @@ import kotlinx.coroutines.launch
  * 2. Fingerprint matching (screen size, pixel ratio, timezone, locale, OS version)
  *
  * After attribution, use [increment] to track conversion events.
+ *
+ * ## Influencer attribution (HELM-221)
+ *
+ * [submitPromoCode], [fetchAttributionStatus], and [submitOriginalTransactionId]
+ * link a customer to an influencer promo code and read that link back. All three
+ * need a bound Context -- call `Helm.configure(context, publishableKey, baseURL)`
+ * (or [match], which binds too) before using them, or they return
+ * `HelmResult.Failure(code = "not_configured")`.
+ *
+ * Every `userId` on these calls is an **opaque string passed through verbatim**:
+ * the SDK does not validate, trim, or normalize it. It must be the same value the
+ * app uses as its RevenueCat app user ID, because that identifier is what joins
+ * the Helm link to the customer's subscription on the server side.
  */
 class Attribution internal constructor() {
 
@@ -29,6 +51,11 @@ class Attribution internal constructor() {
         internal const val PATH_REFERRER = "/api/client/v1/attribution/referrer/"
         internal const val PATH_MATCH = "/api/client/v1/attribution/match/"
         internal const val PATH_EVENT = "/api/client/v1/attribution/event/"
+
+        // HELM-221 influencer attribution routes. All POST, all trailing-slash.
+        internal const val PATH_PROMO_CODE = "/api/client/v1/attribution/promo-code/"
+        internal const val PATH_STATUS = "/api/client/v1/attribution/status/"
+        internal const val PATH_TRANSACTION = "/api/client/v1/attribution/transaction/"
 
         /**
          * Build the POST body for [PATH_MATCH]: the six scored fingerprint
@@ -50,6 +77,16 @@ class Attribution internal constructor() {
     private var appContext: Context? = null
 
     /**
+     * The influencer-attribution engine. Null until [bind]; the public
+     * attribution methods report "not_configured" rather than throw while it is.
+     */
+    @Volatile
+    private var api: AttributionApi? = null
+
+    private val bindLock = Any()
+    private var lifecycleObserved = false
+
+    /**
      * Attempt to match this device to a Helm tracking link.
      * Safe to call on every app launch -- it no-ops if already matched.
      *
@@ -57,7 +94,7 @@ class Attribution internal constructor() {
      */
     fun match(context: Context) {
         try {
-            appContext = context.applicationContext
+            bind(context)
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     performMatch(context.applicationContext)
@@ -92,8 +129,187 @@ class Attribution internal constructor() {
     }
 
     // ------------------------------------------------------------------
+    // Influencer attribution (HELM-221)
+    // ------------------------------------------------------------------
+
+    /**
+     * Link a customer to an influencer promo code.
+     *
+     * Returns [HelmResult.Success] with the confirmed [PromoCodeLink],
+     * [HelmResult.Failure] when the server rejects the code (`"invalid_code"`,
+     * `"code_inactive"`, `"already_linked"`), or [HelmResult.Queued] when the
+     * request could not be delivered.
+     *
+     * A queued submission is retried automatically for up to 30 days -- on the
+     * next `Helm.configure(context, ...)`, the next app foregrounding, or before
+     * the next attribution call. **Deferred failures are silent by design:** if
+     * the replayed code turns out to be invalid, the entry is dropped without a
+     * callback, and the app observes the real state through
+     * [fetchAttributionStatus]. Show queued codes as pending, not linked.
+     *
+     * Never throws.
+     *
+     * @param userId opaque customer identifier, passed to the backend verbatim.
+     *   Must equal the app's RevenueCat app user ID.
+     * @param code the influencer promo code the customer entered.
+     */
+    suspend fun submitPromoCode(userId: String, code: String): HelmResult<PromoCodeLink> =
+        api?.submitPromoCode(userId, code) ?: notConfigured()
+
+    /**
+     * Read the customer's current link state.
+     *
+     * Falls back to the locally cached status when the network is unavailable --
+     * check [AttributionStatus.fromCache] before treating the value as fresh.
+     * Returns `Failure("network_error")` only when there is no cache to serve,
+     * and never returns [HelmResult.Queued] (a read has nothing to replay).
+     *
+     * Never throws.
+     *
+     * @param userId opaque customer identifier, passed to the backend verbatim.
+     *   Must equal the app's RevenueCat app user ID.
+     */
+    suspend fun fetchAttributionStatus(userId: String): HelmResult<AttributionStatus> =
+        api?.fetchAttributionStatus(userId) ?: notConfigured()
+
+    /**
+     * Report the store's original transaction id so Helm can join the
+     * customer's subscription revenue to their influencer link.
+     *
+     * Queues on transport failure exactly like [submitPromoCode]; the endpoint
+     * is an idempotent append, so a replayed duplicate is harmless.
+     *
+     * Never throws.
+     *
+     * @param userId opaque customer identifier, passed to the backend verbatim.
+     *   Must equal the app's RevenueCat app user ID.
+     * @param originalTransactionId the store's original transaction identifier
+     *   for the subscription.
+     */
+    suspend fun submitOriginalTransactionId(
+        userId: String,
+        originalTransactionId: String,
+    ): HelmResult<Unit> =
+        api?.submitOriginalTransactionId(userId, originalTransactionId) ?: notConfigured()
+
+    /**
+     * Fire-and-forget [submitOriginalTransactionId] for callers with no
+     * coroutine scope (e.g. a RevenueCat purchase listener). The result is
+     * discarded; a transport failure still queues for replay.
+     *
+     * Named `...Async` rather than overloading [submitOriginalTransactionId]
+     * because Kotlin rejects a suspend/non-suspend pair with identical value
+     * parameters as conflicting overloads (KT-23610).
+     */
+    fun submitOriginalTransactionIdAsync(userId: String, originalTransactionId: String) {
+        try {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    submitOriginalTransactionId(userId, originalTransactionId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Transaction id submission failed: ${e.message}", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to launch transaction id submission: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Drop all locally held influencer-attribution state: the pending-submission
+     * queue and the cached statuses. Call on logout.
+     *
+     * Install-match state and the device id survive -- they describe the device,
+     * not the customer.
+     */
+    fun reset() {
+        api?.reset()
+    }
+
+    /**
+     * Binds persistence and starts the replay machinery. Idempotent: the engine
+     * and the foreground observer are created once per process.
+     *
+     * Called by `Helm.configure(context, ...)` and by [match], so integrations
+     * that only ever call [match] still get queue replay.
+     */
+    internal fun bind(context: Context) {
+        val appCtx = context.applicationContext
+        appContext = appCtx
+        val observe = synchronized(bindLock) {
+            if (api == null) {
+                api = AttributionApi(
+                    store = SharedPrefsStore(appCtx),
+                    deviceId = { AttributionStore.getOrCreateDeviceId(appCtx) },
+                    clock = System::currentTimeMillis,
+                )
+            }
+            if (lifecycleObserved) {
+                false
+            } else {
+                lifecycleObserved = true
+                true
+            }
+        }
+        // Registration and replay run OUTSIDE bindLock: one posts to the main
+        // thread, the other hits the network.
+        if (observe) observeForeground()
+        replayInBackground()
+    }
+
+    /** Wipe on identity clear, driven by `Analytics.clearIdentity()`. */
+    internal fun onIdentityCleared() {
+        val engine = api
+        if (engine == null) {
+            Log.w(TAG, "onIdentityCleared() before bind -- nothing to wipe")
+            return
+        }
+        engine.reset()
+    }
+
+    // ------------------------------------------------------------------
     // Internal implementation
     // ------------------------------------------------------------------
+
+    /**
+     * There is no Context, so there is nowhere to persist a retry: report and
+     * drop rather than pretending the submission is queued.
+     */
+    private fun <T> notConfigured(): HelmResult<T> = HelmResult.Failure(
+        code = "not_configured",
+        message = "Call Helm.configure(context, publishableKey, baseURL) before using attribution methods.",
+    )
+
+    private fun replayInBackground() {
+        val engine = api ?: return
+        try {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    engine.replayPending()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Attribution queue replay failed: ${e.message}", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to launch attribution queue replay: ${e.message}", e)
+        }
+    }
+
+    private fun observeForeground() {
+        try {
+            // LifecycleRegistry.addObserver enforces the main thread -- hop
+            // defensively, exactly as Analytics.observeLifecycle does.
+            Handler(Looper.getMainLooper()).post {
+                ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+                    override fun onStart(owner: LifecycleOwner) {
+                        replayInBackground()
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to observe foreground for attribution replay: ${e.message}", e)
+        }
+    }
 
     private suspend fun performMatch(context: Context) {
         if (AttributionStore.hasChecked(context)) {
