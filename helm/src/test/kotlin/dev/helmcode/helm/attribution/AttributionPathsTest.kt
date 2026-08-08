@@ -16,4 +16,16 @@ class AttributionPathsTest {
         assertEquals("/api/client/v1/attribution/match/", Attribution.PATH_MATCH)
         assertEquals("/api/client/v1/attribution/event/", Attribution.PATH_EVENT)
     }
+
+    /**
+     * HELM-221 endpoints. Same contract, same failure mode: these three POST
+     * routes (trailing slash included) are the frozen agreement with the Helm
+     * service ticket and the iOS SDK's APIPath additions.
+     */
+    @Test
+    fun promoCodeStatusAndTransactionPathsMatchBackendRoutes() {
+        assertEquals("/api/client/v1/attribution/promo-code/", Attribution.PATH_PROMO_CODE)
+        assertEquals("/api/client/v1/attribution/status/", Attribution.PATH_STATUS)
+        assertEquals("/api/client/v1/attribution/transaction/", Attribution.PATH_TRANSACTION)
+    }
 }
