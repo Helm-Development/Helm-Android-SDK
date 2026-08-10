@@ -38,6 +38,14 @@ import kotlinx.coroutines.launch
  * the SDK does not validate, trim, or normalize it. It must be the same value the
  * app uses as its RevenueCat app user ID, because that identifier is what joins
  * the Helm link to the customer's subscription on the server side.
+ *
+ * ## Sandbox submissions (TAS-801)
+ *
+ * All three calls send the `debug` flag given to `Helm.configure(...)`. With
+ * `debug = true` the resulting link and transaction lineage are marked sandbox
+ * test data in Helm and are excluded from every payout and billing figure. A
+ * submission queued while offline replays with the marker it was **made** under,
+ * so relabelling cannot happen across a build change.
  */
 class Attribution internal constructor() {
 

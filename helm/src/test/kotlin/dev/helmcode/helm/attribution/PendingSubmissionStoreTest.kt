@@ -2,6 +2,7 @@ package dev.helmcode.helm.attribution
 
 import dev.helmcode.helm.analytics.InMemoryStore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -124,6 +125,61 @@ class PendingSubmissionStoreTest {
         store.remove(target.id)
 
         assertEquals(listOf("user-2"), store.all().map { it.userId })
+    }
+
+    // ---- debug / sandbox marker (TAS-801) -------------------------------
+
+    @Test
+    fun debugMarkerRoundTripsThroughJsonForBothKinds() {
+        store.enqueue(PendingSubmission.promoCode("user-1", "anna", now, debug = true))
+        store.enqueue(PendingSubmission.transaction("user-1", "tx-9", now, debug = true))
+        store.enqueue(PendingSubmission.promoCode("user-2", "bruno", now))
+
+        val entries = store.all()
+        assertTrue(entries.first { it.userId == "user-1" && it.kind == PendingKind.PROMO_CODE }.debug)
+        assertTrue(entries.first { it.kind == PendingKind.TRANSACTION }.debug)
+        assertFalse("the default is live", entries.first { it.userId == "user-2" }.debug)
+    }
+
+    /**
+     * Rows written by 0.5.0 have no `debug` key. They must decode as **live** --
+     * not be rejected, which would silently discard a real user's queued
+     * submission on the upgrade to 0.6.0.
+     */
+    @Test
+    fun legacyRowsWithoutTheDebugFieldDecodeAsLive() {
+        backing.put(
+            PendingSubmissionStore.KEY,
+            """[{"id":"legacy-1","kind":"promo_code","user_id":"user-1",""" +
+                """"enqueued_at_ms":$now,"code":"anna"}]""",
+        )
+
+        val entry = store.all().single()
+        assertEquals("legacy-1", entry.id)
+        assertEquals("anna", entry.code)
+        assertFalse("a pre-flag row predates sandbox and is live", entry.debug)
+    }
+
+    @Test
+    fun sameSubmissionUnderDifferentMarkersAreDistinctEntries() {
+        store.enqueue(PendingSubmission.promoCode("user-1", "anna", now, debug = true))
+        store.enqueue(PendingSubmission.promoCode("user-1", "anna", now, debug = false))
+
+        // Two different assertions to the server; merging them would drop one
+        // environment's marker.
+        val entries = store.all()
+        assertEquals(2, entries.size)
+        assertEquals(setOf(true, false), entries.map { it.debug }.toSet())
+    }
+
+    @Test
+    fun dedupeStillMergesTheSameSubmissionUnderTheSameMarker() {
+        store.enqueue(PendingSubmission.promoCode("user-1", "anna", now - 5 * day, debug = true))
+        store.enqueue(PendingSubmission.promoCode("user-1", "anna", now, debug = true))
+
+        val entry = store.all().single()
+        assertTrue(entry.debug)
+        assertEquals(now - 5 * day, entry.enqueuedAtMs)
     }
 
     @Test

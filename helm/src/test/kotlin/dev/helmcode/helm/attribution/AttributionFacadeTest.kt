@@ -69,4 +69,46 @@ class AttributionFacadeTest {
     fun resetOnAnUnboundInstanceIsANoOp() {
         Helm.attribution.reset()
     }
+
+    // ---- debug / sandbox marker (TAS-801) -------------------------------
+
+    /**
+     * `debug` is defaulted on both overloads, so every pre-0.6.0 call site --
+     * two positional arguments, named arguments, with or without a Context --
+     * still compiles and still means live. This test is the source-compatibility
+     * proof: it exercises the old shapes verbatim.
+     */
+    @Test
+    fun legacyConfigureCallShapesStillCompileAndMeanLive() {
+        Helm.configure("pk_test", "https://helmcode.dev")
+        assertEquals(false, Configuration.instance?.debug)
+
+        Helm.configure(publishableKey = "pk_test", baseURL = "https://helmcode.dev")
+        assertEquals(false, Configuration.instance?.debug)
+    }
+
+    @Test
+    fun configureCarriesTheDebugFlagOntoTheConfiguration() {
+        Helm.configure("pk_test", "https://helmcode.dev", debug = true)
+        assertEquals(true, Configuration.instance?.debug)
+        assertEquals("pk_test", Configuration.instance?.publishableKey)
+
+        Helm.configure(publishableKey = "pk_test", baseURL = "https://helmcode.dev", debug = false)
+        assertEquals(false, Configuration.instance?.debug)
+    }
+
+    /**
+     * The sandbox marker reaches the request builders through
+     * `AttributionApi.currentDebug()`, which is the single read of the
+     * configuration on the fresh-submission path.
+     */
+    @Test
+    fun theConfiguredFlagIsWhatTheRequestBuildersRead() {
+        Helm.configure("pk_test", "https://helmcode.dev", debug = true)
+        assertEquals(true, AttributionApi.currentDebug())
+        assertEquals(true, AttributionApi.promoCodeBody("u", "c", "d", AttributionApi.currentDebug())["debug"])
+
+        Helm.configure("pk_test", "https://helmcode.dev", debug = false)
+        assertEquals(false, AttributionApi.currentDebug())
+    }
 }

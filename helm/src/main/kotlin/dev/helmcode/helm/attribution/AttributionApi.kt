@@ -2,6 +2,7 @@ package dev.helmcode.helm.attribution
 
 import android.util.Log
 import dev.helmcode.helm.AttributionStatus
+import dev.helmcode.helm.Configuration
 import dev.helmcode.helm.HelmResult
 import dev.helmcode.helm.PromoCodeLink
 import dev.helmcode.helm.analytics.KeyValueStore
@@ -35,29 +36,51 @@ internal class AttributionApi(
         /** Wire value for this SDK; the backend keys promo-code scope on it. */
         internal const val PLATFORM = "android"
 
-        internal fun promoCodeBody(userId: String, code: String, deviceId: String): Map<String, Any?> = mapOf(
+        // `debug` is ALWAYS present on all three bodies, as a real JSON boolean.
+        // The server reads it as `data.get('debug') is True`, so a missing field
+        // or a string "true" both mean live -- sending it explicitly is what
+        // makes a sandbox submission legible.
+
+        internal fun promoCodeBody(
+            userId: String,
+            code: String,
+            deviceId: String,
+            debug: Boolean,
+        ): Map<String, Any?> = mapOf(
             "user_id" to userId,
             "code" to code,
             "platform" to PLATFORM,
             "device_id" to deviceId,
+            "debug" to debug,
         )
 
-        internal fun statusBody(userId: String, deviceId: String): Map<String, Any?> = mapOf(
+        internal fun statusBody(userId: String, deviceId: String, debug: Boolean): Map<String, Any?> = mapOf(
             "user_id" to userId,
             "platform" to PLATFORM,
             "device_id" to deviceId,
+            "debug" to debug,
         )
 
         internal fun transactionBody(
             userId: String,
             originalTransactionId: String,
             deviceId: String,
+            debug: Boolean,
         ): Map<String, Any?> = mapOf(
             "user_id" to userId,
             "original_transaction_id" to originalTransactionId,
             "platform" to PLATFORM,
             "device_id" to deviceId,
+            "debug" to debug,
         )
+
+        /**
+         * The configured sandbox marker, or live when the SDK is unconfigured.
+         *
+         * Read at the moment of each *fresh* submission. Replays deliberately do
+         * not consult this -- they use the value the queued entry captured.
+         */
+        internal fun currentDebug(): Boolean = Configuration.instance?.debug ?: false
 
         /**
          * Maps a 4xx error body onto a [HelmResult.Failure].
@@ -104,17 +127,20 @@ internal class AttributionApi(
      */
     suspend fun submitPromoCode(userId: String, code: String): HelmResult<PromoCodeLink> {
         replayPending()
-        return when (val outcome = post(PATH_PROMO_CODE, promoCodeBody(userId, code, deviceId()))) {
+        // Captured once, before the request: the same value stamps the request
+        // and -- if it has to be queued -- the queued entry.
+        val debug = currentDebug()
+        return when (val outcome = post(PATH_PROMO_CODE, promoCodeBody(userId, code, deviceId(), debug))) {
             is Outcome.Ok -> {
                 val link = PromoCodeLink(
                     influencerCode = outcome.body["influencer_code"] as? String ?: code,
                     offeringId = outcome.body["offering_id"] as? String,
                 )
-                cacheLink(userId, link)
+                cacheLink(userId, link, debug)
                 HelmResult.Success(link)
             }
             Outcome.Transport -> {
-                pending.enqueue(PendingSubmission.promoCode(userId, code, clock()))
+                pending.enqueue(PendingSubmission.promoCode(userId, code, clock(), debug))
                 HelmResult.Queued
             }
             is Outcome.Terminal -> outcome.failure
@@ -127,21 +153,29 @@ internal class AttributionApi(
      * Never returns [HelmResult.Queued] -- a read has nothing to replay. When
      * the network is unavailable it falls back to the cached status
      * (`fromCache = true`), and only fails when there is no cache to serve.
+     *
+     * The fallback is environment-aware: a cached entry recorded under the other
+     * `debug` setting is treated as a **miss**, not served. A sandbox build must
+     * never present a live link as its own (or the reverse); the app sees
+     * `network_error` and can refetch when it is online.
      */
     suspend fun fetchAttributionStatus(userId: String): HelmResult<AttributionStatus> {
         replayPending()
-        return when (val outcome = post(PATH_STATUS, statusBody(userId, deviceId()))) {
+        val debug = currentDebug()
+        return when (val outcome = post(PATH_STATUS, statusBody(userId, deviceId(), debug))) {
             is Outcome.Ok -> {
                 val status = CachedStatus(
                     linked = outcome.body["linked"] as? Boolean ?: false,
                     influencerCode = outcome.body["influencer_code"] as? String,
                     offeringId = outcome.body["offering_id"] as? String,
                     fetchedAtMs = clock(),
+                    debug = debug,
                 )
                 statusCache.put(userId, status)
                 HelmResult.Success(status.toPublic(fromCache = false))
             }
             Outcome.Transport -> statusCache.get(userId)
+                ?.takeIf { it.debug == debug }
                 ?.let { HelmResult.Success(it.toPublic(fromCache = true)) }
                 ?: HelmResult.Failure("network_error")
             // The server answered: no cache fallback, the answer is authoritative.
@@ -155,11 +189,14 @@ internal class AttributionApi(
         originalTransactionId: String,
     ): HelmResult<Unit> {
         replayPending()
-        val body = transactionBody(userId, originalTransactionId, deviceId())
+        val debug = currentDebug()
+        val body = transactionBody(userId, originalTransactionId, deviceId(), debug)
         return when (val outcome = post(PATH_TRANSACTION, body)) {
             is Outcome.Ok -> HelmResult.Success(Unit)
             Outcome.Transport -> {
-                pending.enqueue(PendingSubmission.transaction(userId, originalTransactionId, clock()))
+                pending.enqueue(
+                    PendingSubmission.transaction(userId, originalTransactionId, clock(), debug),
+                )
                 HelmResult.Queued
             }
             is Outcome.Terminal -> outcome.failure
@@ -198,6 +235,7 @@ internal class AttributionApi(
                                     influencerCode = outcome.body["influencer_code"] as? String ?: entry.code,
                                     offeringId = outcome.body["offering_id"] as? String,
                                 ),
+                                entry.debug,
                             )
                         }
                         pending.remove(entry.id)
@@ -260,19 +298,26 @@ internal class AttributionApi(
         Outcome.Transport
     }
 
-    /** Endpoint + body for a queued entry, or null when the entry cannot be replayed. */
+    /**
+     * Endpoint + body for a queued entry, or null when the entry cannot be
+     * replayed.
+     *
+     * The body carries **`entry.debug`**, never [currentDebug]. A submission made
+     * from a sandbox build and replayed after the app shipped live is still a
+     * sandbox submission; re-reading the configuration here would relabel it.
+     */
     private fun requestFor(entry: PendingSubmission): Pair<String, Map<String, Any?>>? =
         when (entry.kind) {
             PendingKind.PROMO_CODE -> entry.code?.let {
-                PATH_PROMO_CODE to promoCodeBody(entry.userId, it, deviceId())
+                PATH_PROMO_CODE to promoCodeBody(entry.userId, it, deviceId(), entry.debug)
             }
             PendingKind.TRANSACTION -> entry.originalTransactionId?.let {
-                PATH_TRANSACTION to transactionBody(entry.userId, it, deviceId())
+                PATH_TRANSACTION to transactionBody(entry.userId, it, deviceId(), entry.debug)
             }
         }
 
     /** A confirmed link is a complete status -- record it so a later offline read can serve it. */
-    private fun cacheLink(userId: String, link: PromoCodeLink) {
+    private fun cacheLink(userId: String, link: PromoCodeLink, debug: Boolean) {
         statusCache.put(
             userId,
             CachedStatus(
@@ -280,6 +325,7 @@ internal class AttributionApi(
                 influencerCode = link.influencerCode,
                 offeringId = link.offeringId,
                 fetchedAtMs = clock(),
+                debug = debug,
             ),
         )
     }

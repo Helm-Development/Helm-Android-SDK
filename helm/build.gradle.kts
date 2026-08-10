@@ -57,7 +57,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.Helm-Development"
                 artifactId = "Helm-Android-SDK"
-                version = project.findProperty("VERSION_NAME") as String? ?: "0.5.0"
+                version = project.findProperty("VERSION_NAME") as String? ?: "0.6.0"
             }
         }
     }

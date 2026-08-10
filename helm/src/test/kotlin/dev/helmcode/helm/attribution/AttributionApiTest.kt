@@ -50,8 +50,13 @@ class AttributionApiTest {
     }
 
     /** Nothing is listening on port 1, so every request fails to connect immediately. */
-    private fun goOffline() {
-        Configuration.instance = Configuration("pk_test", "http://127.0.0.1:1")
+    private fun goOffline(debug: Boolean = false) {
+        Configuration.instance = Configuration("pk_test", "http://127.0.0.1:1", debug)
+    }
+
+    /** Re-points at the live MockWebServer with [debug] in force. */
+    private fun configure(debug: Boolean) {
+        Configuration.instance = Configuration("pk_test", server.url("/").toString().trimEnd('/'), debug)
     }
 
     private fun jsonResponse(code: Int, body: String) =
@@ -76,6 +81,7 @@ class AttributionApiTest {
         assertTrue(body, body.contains("\"code\":\"anna\""))
         assertTrue(body, body.contains("\"platform\":\"android\""))
         assertTrue(body, body.contains("\"device_id\":\"device-uuid\""))
+        assertTrue("the sandbox marker is always on the wire", body.contains("\"debug\":false"))
     }
 
     @Test
@@ -216,6 +222,7 @@ class AttributionApiTest {
         assertTrue(body, body.contains("\"original_transaction_id\":\"tx-9\""))
         assertTrue(body, body.contains("\"platform\":\"android\""))
         assertTrue(body, body.contains("\"device_id\":\"device-uuid\""))
+        assertTrue("the sandbox marker is always on the wire", body.contains("\"debug\":false"))
     }
 
     @Test
@@ -340,6 +347,7 @@ class AttributionApiTest {
         assertTrue(body, body.contains("\"user_id\":\"user-1\""))
         assertTrue(body, body.contains("\"platform\":\"android\""))
         assertTrue(body, body.contains("\"device_id\":\"device-uuid\""))
+        assertTrue("the sandbox marker is always on the wire", body.contains("\"debug\":false"))
         assertFalse("a status read carries no code", body.contains("\"code\""))
     }
 
@@ -434,6 +442,127 @@ class AttributionApiTest {
         assertEquals(0, api.pending.count())
     }
 
+    // ---- debug / sandbox marker (TAS-801) -------------------------------
+
+    @Test
+    fun allThreeEndpointsSendDebugTrueWhenConfiguredForSandbox() = runBlocking {
+        configure(debug = true)
+        repeat(3) { server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna"}""")) }
+
+        api.submitPromoCode("user-1", "anna")
+        api.fetchAttributionStatus("user-1")
+        api.submitOriginalTransactionId("user-1", "tx-9")
+
+        val seen = mutableMapOf<String, String>()
+        repeat(3) {
+            val request = server.takeRequest(2, TimeUnit.SECONDS)!!
+            seen[request.path!!] = request.body.readUtf8()
+        }
+        for (path in listOf(Attribution.PATH_PROMO_CODE, Attribution.PATH_STATUS, Attribution.PATH_TRANSACTION)) {
+            val body = seen[path]!!
+            assertTrue("$path body must declare sandbox: $body", body.contains("\"debug\":true"))
+        }
+    }
+
+    @Test
+    fun allThreeEndpointsSendDebugFalseByDefault() = runBlocking {
+        repeat(3) { server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna"}""")) }
+
+        api.submitPromoCode("user-1", "anna")
+        api.fetchAttributionStatus("user-1")
+        api.submitOriginalTransactionId("user-1", "tx-9")
+
+        repeat(3) {
+            val body = server.takeRequest(2, TimeUnit.SECONDS)!!.body.readUtf8()
+            assertTrue("a default build is live: $body", body.contains("\"debug\":false"))
+            assertFalse(body, body.contains("\"debug\":true"))
+        }
+    }
+
+    @Test
+    fun queuedSubmissionCapturesTheDebugMarkerInForceAtEnqueueTime() = runBlocking {
+        configure(debug = true)
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+
+        assertEquals(HelmResult.Queued, api.submitPromoCode("user-1", "anna"))
+
+        assertTrue(api.pending.all().single().debug)
+    }
+
+    /**
+     * The one behaviour the whole marker design exists for: a code entered on a
+     * QA build that only reaches the server after the tester moved to a live
+     * build must still land as sandbox data. Re-reading the configuration at
+     * replay time would silently promote test data into payout figures.
+     */
+    @Test
+    fun replayPreservesTheOriginalMarkerAcrossAReconfigure() = runBlocking {
+        configure(debug = true)
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+        assertEquals(HelmResult.Queued, api.submitPromoCode("user-1", "anna"))
+        server.takeRequest(2, TimeUnit.SECONDS)
+
+        configure(debug = false)
+        server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna"}"""))
+        api.replayPending()
+
+        val replayed = server.takeRequest(2, TimeUnit.SECONDS)!!
+        assertEquals(Attribution.PATH_PROMO_CODE, replayed.path)
+        val body = replayed.body.readUtf8()
+        assertTrue("the replay must report where the submission came from: $body", body.contains("\"debug\":true"))
+        assertEquals(0, api.pending.count())
+    }
+
+    @Test
+    fun replayOfATransactionAlsoPreservesItsMarker() = runBlocking {
+        api.pending.enqueue(PendingSubmission.transaction("user-1", "tx-9", now, debug = true))
+        configure(debug = false)
+        server.enqueue(jsonResponse(200, """{"recorded": true}"""))
+
+        api.replayPending()
+
+        val body = server.takeRequest(2, TimeUnit.SECONDS)!!.body.readUtf8()
+        assertTrue(body, body.contains("\"debug\":true"))
+    }
+
+    @Test
+    fun replayStoresTheQueuedMarkerOnTheCachedStatus() = runBlocking {
+        api.pending.enqueue(PendingSubmission.promoCode("user-1", "anna", now, debug = true))
+        configure(debug = true)
+        server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna"}"""))
+
+        api.replayPending()
+
+        assertTrue(api.statusCache.get("user-1")!!.debug)
+    }
+
+    @Test
+    fun offlineStatusFetchWillNotServeACacheEntryFromTheOtherEnvironment() = runBlocking {
+        configure(debug = true)
+        server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna", "offering_id": "off_1"}"""))
+        api.fetchAttributionStatus("user-1")
+        assertTrue("the sandbox fetch must be cached as sandbox", api.statusCache.get("user-1")!!.debug)
+
+        // Same user, same device, live build: the sandbox link is not this
+        // build's answer, so there is nothing to serve.
+        goOffline(debug = false)
+        assertEquals(HelmResult.Failure("network_error"), api.fetchAttributionStatus("user-1"))
+    }
+
+    @Test
+    fun offlineStatusFetchServesACacheEntryFromTheSameEnvironment() = runBlocking {
+        configure(debug = true)
+        server.enqueue(jsonResponse(200, """{"linked": true, "influencer_code": "anna", "offering_id": "off_1"}"""))
+        api.fetchAttributionStatus("user-1")
+
+        goOffline(debug = true)
+
+        assertEquals(
+            HelmResult.Success(AttributionStatus(true, "anna", "off_1", fromCache = true)),
+            api.fetchAttributionStatus("user-1"),
+        )
+    }
+
     // ---- pure body builders ---------------------------------------------
 
     @Test
@@ -444,12 +573,13 @@ class AttributionApiTest {
                 "code" to "c",
                 "platform" to "android",
                 "device_id" to "d",
+                "debug" to false,
             ),
-            AttributionApi.promoCodeBody("u", "c", "d"),
+            AttributionApi.promoCodeBody("u", "c", "d", false),
         )
         assertEquals(
-            mapOf("user_id" to "u", "platform" to "android", "device_id" to "d"),
-            AttributionApi.statusBody("u", "d"),
+            mapOf("user_id" to "u", "platform" to "android", "device_id" to "d", "debug" to false),
+            AttributionApi.statusBody("u", "d", false),
         )
         assertEquals(
             mapOf(
@@ -457,18 +587,51 @@ class AttributionApiTest {
                 "original_transaction_id" to "tx",
                 "platform" to "android",
                 "device_id" to "d",
+                "debug" to false,
             ),
-            AttributionApi.transactionBody("u", "tx", "d"),
+            AttributionApi.transactionBody("u", "tx", "d", false),
         )
+    }
+
+    /**
+     * `debug` is a real JSON boolean on every body, in both states. The server
+     * tests `data.get('debug') is True`, so a string or an omission silently
+     * means live -- the type is part of the contract, not a detail.
+     */
+    @Test
+    fun everyBodyBuilderCarriesTheDebugFlagAsABoolean() {
+        for (debug in listOf(false, true)) {
+            val bodies = listOf(
+                AttributionApi.promoCodeBody("u", "c", "d", debug),
+                AttributionApi.statusBody("u", "d", debug),
+                AttributionApi.transactionBody("u", "tx", "d", debug),
+            )
+            for (body in bodies) {
+                assertTrue("debug must always be present", body.containsKey("debug"))
+                assertEquals(debug, body["debug"])
+            }
+        }
     }
 
     @Test
     fun userIdIsPassedThroughVerbatim() {
         // Opaque RevenueCat app user id: no trimming, no lowercasing, no validation.
         val messy = "  RCAnonymousID:AbC_123  "
-        assertEquals(messy, AttributionApi.promoCodeBody(messy, "c", "d")["user_id"])
-        assertEquals(messy, AttributionApi.statusBody(messy, "d")["user_id"])
-        assertEquals(messy, AttributionApi.transactionBody(messy, "tx", "d")["user_id"])
+        assertEquals(messy, AttributionApi.promoCodeBody(messy, "c", "d", false)["user_id"])
+        assertEquals(messy, AttributionApi.statusBody(messy, "d", false)["user_id"])
+        assertEquals(messy, AttributionApi.transactionBody(messy, "tx", "d", false)["user_id"])
+    }
+
+    @Test
+    fun currentDebugFollowsTheConfigurationAndDefaultsToLive() {
+        configure(debug = true)
+        assertTrue(AttributionApi.currentDebug())
+
+        configure(debug = false)
+        assertFalse(AttributionApi.currentDebug())
+
+        Configuration.instance = null
+        assertFalse("an unconfigured SDK is never sandbox", AttributionApi.currentDebug())
     }
 
     @Test

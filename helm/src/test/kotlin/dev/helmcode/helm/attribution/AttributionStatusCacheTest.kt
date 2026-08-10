@@ -74,6 +74,50 @@ class AttributionStatusCacheTest {
         assertNull(backing.get(AttributionStatusCache.KEY))
     }
 
+    // ---- debug / sandbox marker (TAS-801) -------------------------------
+
+    @Test
+    fun debugMarkerRoundTrips() {
+        cache.put("user-1", CachedStatus(true, "anna", "off_1", now, debug = true))
+        cache.put("user-2", CachedStatus(true, "bruno", null, now))
+
+        assertTrue(cache.get("user-1")!!.debug)
+        assertFalse("the default is live", cache.get("user-2")!!.debug)
+    }
+
+    /**
+     * Entries written by 0.5.0 have no `debug` key and describe live data. They
+     * must read back as live rather than as a missing entry -- an upgrade must
+     * not throw away a working offline fallback.
+     */
+    @Test
+    fun legacyEntriesWithoutTheDebugFieldReadAsLive() {
+        backing.put(
+            AttributionStatusCache.KEY,
+            """{"user-1":{"linked":true,"influencer_code":"anna","fetched_at_ms":$now}}""",
+        )
+
+        val cached = cache.get("user-1")!!
+        assertTrue(cached.linked)
+        assertEquals("anna", cached.influencerCode)
+        assertFalse(cached.debug)
+    }
+
+    /**
+     * The cache itself is environment-*labelled*, not environment-*keyed*: it
+     * stores whatever it is given and the reader
+     * ([AttributionApi.fetchAttributionStatus]) decides a mismatched entry is a
+     * miss. Keeping the policy in one place is why the key format never had to
+     * change.
+     */
+    @Test
+    fun aLaterFetchInTheOtherEnvironmentOverwritesTheMarker() {
+        cache.put("user-1", CachedStatus(true, "anna", "off_1", now, debug = true))
+        cache.put("user-1", CachedStatus(true, "anna", "off_1", now + 1000, debug = false))
+
+        assertFalse(cache.get("user-1")!!.debug)
+    }
+
     @Test
     fun corruptJsonReadsAsEmptyAndSelfHeals() {
         backing.put(AttributionStatusCache.KEY, "not json at all")

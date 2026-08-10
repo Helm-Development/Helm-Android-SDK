@@ -4,12 +4,19 @@ import android.util.Log
 import dev.helmcode.helm.analytics.KeyValueStore
 import org.json.JSONObject
 
-/** A previously-fetched attribution status, kept so a status read survives an outage. */
+/**
+ * A previously-fetched attribution status, kept so a status read survives an
+ * outage.
+ *
+ * @param debug the sandbox marker of the submission or fetch that produced this
+ *   entry. A reader must not serve an entry from the other environment.
+ */
 internal data class CachedStatus(
     val linked: Boolean,
     val influencerCode: String?,
     val offeringId: String?,
     val fetchedAtMs: Long,
+    val debug: Boolean = false,
 )
 
 /**
@@ -23,6 +30,11 @@ internal data class CachedStatus(
  * Refreshed on a successful status fetch, a successful promo-code submit, and a
  * successful promo-code replay -- each of which is a complete, authoritative
  * status. Wiped by `Attribution.reset()` and by `Analytics.clearIdentity()`.
+ *
+ * Each entry records the [CachedStatus.debug] marker it was produced under. The
+ * storage key stays per-`userId` rather than per-(user, environment): an app's
+ * flag only changes across builds, so `AttributionApi` treats a cross-environment
+ * entry as a miss instead of paying for a key-format migration.
  *
  * Thread-safety: every method serializes on [lock]. Corrupt JSON is logged and
  * treated as empty.
@@ -39,6 +51,7 @@ internal class AttributionStatusCache(
         private const val FIELD_INFLUENCER_CODE = "influencer_code"
         private const val FIELD_OFFERING_ID = "offering_id"
         private const val FIELD_FETCHED_AT = "fetched_at_ms"
+        internal const val FIELD_DEBUG = "debug"
     }
 
     private val lock = Any()
@@ -50,6 +63,9 @@ internal class AttributionStatusCache(
             influencerCode = entry.optString(FIELD_INFLUENCER_CODE).takeIf { it.isNotEmpty() },
             offeringId = entry.optString(FIELD_OFFERING_ID).takeIf { it.isNotEmpty() },
             fetchedAtMs = entry.optLong(FIELD_FETCHED_AT, 0L),
+            // Absent on entries written by 0.5.0 and earlier -- those predate
+            // the flag and describe live data.
+            debug = entry.optBoolean(FIELD_DEBUG, false),
         )
     }
 
@@ -60,6 +76,7 @@ internal class AttributionStatusCache(
             status.influencerCode?.let { put(FIELD_INFLUENCER_CODE, it) }
             status.offeringId?.let { put(FIELD_OFFERING_ID, it) }
             put(FIELD_FETCHED_AT, status.fetchedAtMs)
+            put(FIELD_DEBUG, status.debug)
         }
         root.put(userId, entry)
         store.put(KEY, root.toString())

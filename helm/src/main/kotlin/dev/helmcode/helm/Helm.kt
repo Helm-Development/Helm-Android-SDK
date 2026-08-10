@@ -28,9 +28,13 @@ object Helm {
      *
      * @param publishableKey Your Helm publishable key (starts with "pk_")
      * @param baseURL The base URL of your Helm API (e.g. "https://helmcode.dev")
+     * @param debug `true` registers every attribution submission (promo-code
+     *   link, status, transaction) as sandbox test data in Helm; sandbox data is
+     *   always excluded from payouts. Set it from your build configuration;
+     *   default `false` keeps production builds safe.
      */
-    fun configure(publishableKey: String, baseURL: String) {
-        Configuration.instance = Configuration(publishableKey, baseURL)
+    fun configure(publishableKey: String, baseURL: String, debug: Boolean = false) {
+        Configuration.instance = Configuration(publishableKey, baseURL, debug)
     }
 
     /**
@@ -50,9 +54,15 @@ object Helm {
      *   application context is retained.
      * @param publishableKey Your Helm publishable key (starts with "pk_")
      * @param baseURL The base URL of your Helm API (e.g. "https://helmcode.dev")
+     * @param debug `true` registers every attribution submission (promo-code
+     *   link, status, transaction) as sandbox test data in Helm; sandbox data is
+     *   always excluded from payouts. Set it from your build configuration;
+     *   default `false` keeps production builds safe. A submission that is
+     *   queued offline keeps the value in force when it was made, so a replay
+     *   after a build change still reports the environment it came from.
      */
-    fun configure(context: Context, publishableKey: String, baseURL: String) {
-        Configuration.instance = Configuration(publishableKey, baseURL)
+    fun configure(context: Context, publishableKey: String, baseURL: String, debug: Boolean = false) {
+        Configuration.instance = Configuration(publishableKey, baseURL, debug)
         Attribution.instance.bind(context)
     }
 

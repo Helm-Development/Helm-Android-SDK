@@ -23,6 +23,9 @@ internal enum class PendingKind(val wire: String) {
  * @param enqueuedAtMs when the submission first failed. Preserved across
  *   re-enqueues so a repeatedly-retried submission cannot reset its own
  *   retention window.
+ * @param debug the sandbox marker in force when the submission was *made*, not
+ *   when it is replayed. A queued entry carries its own environment so a replay
+ *   after a reconfigure still reports where the submission came from.
  */
 internal data class PendingSubmission(
     val id: String,
@@ -31,12 +34,17 @@ internal data class PendingSubmission(
     val enqueuedAtMs: Long,
     val code: String? = null,
     val originalTransactionId: String? = null,
+    val debug: Boolean = false,
 ) {
     /**
      * Identity of the *logical* submission. Two entries with the same key are
      * the same request, so the queue holds at most one of them.
+     *
+     * [debug] participates: the same code submitted from a sandbox build and
+     * from a live build are two distinct assertions to the server, and merging
+     * them would silently discard one environment's marker.
      */
-    fun dedupeKey(): String = "${kind.wire}|$userId|${code ?: originalTransactionId ?: ""}"
+    fun dedupeKey(): String = "${kind.wire}|$userId|${code ?: originalTransactionId ?: ""}|$debug"
 
     fun toJson(): JSONObject = JSONObject().apply {
         put(FIELD_ID, id)
@@ -45,6 +53,7 @@ internal data class PendingSubmission(
         put(FIELD_ENQUEUED_AT, enqueuedAtMs)
         code?.let { put(FIELD_CODE, it) }
         originalTransactionId?.let { put(FIELD_TRANSACTION_ID, it) }
+        put(FIELD_DEBUG, debug)
     }
 
     companion object {
@@ -54,21 +63,29 @@ internal data class PendingSubmission(
         private const val FIELD_ENQUEUED_AT = "enqueued_at_ms"
         private const val FIELD_CODE = "code"
         private const val FIELD_TRANSACTION_ID = "original_transaction_id"
+        internal const val FIELD_DEBUG = "debug"
 
-        fun promoCode(userId: String, code: String, nowMs: Long) = PendingSubmission(
+        fun promoCode(userId: String, code: String, nowMs: Long, debug: Boolean = false) = PendingSubmission(
             id = UUID.randomUUID().toString(),
             kind = PendingKind.PROMO_CODE,
             userId = userId,
             enqueuedAtMs = nowMs,
             code = code,
+            debug = debug,
         )
 
-        fun transaction(userId: String, originalTransactionId: String, nowMs: Long) = PendingSubmission(
+        fun transaction(
+            userId: String,
+            originalTransactionId: String,
+            nowMs: Long,
+            debug: Boolean = false,
+        ) = PendingSubmission(
             id = UUID.randomUUID().toString(),
             kind = PendingKind.TRANSACTION,
             userId = userId,
             enqueuedAtMs = nowMs,
             originalTransactionId = originalTransactionId,
+            debug = debug,
         )
 
         /** Null for anything unreadable -- a corrupt row is dropped, not crashed on. */
@@ -86,6 +103,9 @@ internal data class PendingSubmission(
                 enqueuedAtMs = enqueuedAt,
                 code = code,
                 originalTransactionId = transactionId,
+                // Absent on rows written by 0.5.0 and earlier: those predate the
+                // flag, so they are live. Never a reason to drop the row.
+                debug = json.optBoolean(FIELD_DEBUG, false),
             )
         }
     }
