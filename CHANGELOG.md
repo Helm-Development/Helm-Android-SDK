@@ -4,6 +4,18 @@ All notable changes to the Helm Android SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-09-07
+
+The SDK leaves alpha. There is no functional change from 0.7.0 — the code is
+identical. The version number is the announcement.
+
+What it commits to: from here on the public API follows semantic versioning
+properly. A breaking change requires a major version, so you can depend on a
+`1.x` range instead of pinning an exact version. Under `0.x` any release was
+free to break you.
+
+Upgrading from 0.7.0 needs no code changes.
+
 ## [0.7.0] - 2026-09-07
 
 `debug` now rides on every request the SDK makes, and a new `environment` label
@@ -45,5 +57,6 @@ and a build that sets neither still reports `debug: false` and
   payouts. Defaults to `false`. A submission queued offline replays with the
   marker it was made under.
 
+[1.0.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.7.0...1.0.0
 [0.7.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.5.0...0.6.0
