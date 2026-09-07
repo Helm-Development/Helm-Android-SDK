@@ -110,4 +110,73 @@ class AnalyticsTest {
         analytics.onAttributionMatched("attr-early")
         assertEquals("attr-early", analytics.attributionTokenForTest())
     }
+
+    // ---- per-event debug and environment (HELM-242) ----------------------
+
+    private fun analyticsWith(queue: EventQueue): Analytics {
+        val backing = InMemoryStore()
+        return Analytics(
+            installationStore = InstallationStore(DeviceIdStore(backing)),
+            identityStore = IdentityStore(backing),
+            sessionManager = SessionManager(),
+            queue = queue,
+            deviceFactsOverride = device,
+        )
+    }
+
+    @Test
+    fun trackedEventCapturesTheConfiguredDebugAndEnvironment() {
+        Configuration.instance = Configuration(
+            "pk_test", "https://example.invalid", debug = true, environment = "staging",
+        )
+        val queue = EventQueue()
+        val analytics = analyticsWith(queue)
+        analytics.startForTest()
+
+        analytics.track("tapped")
+
+        val payload = queue.drain().single().payload()
+        assertEquals(true, payload["debug"])
+        assertEquals("staging", payload["environment"])
+    }
+
+    @Test
+    fun trackedEventDefaultsToLiveProduction() {
+        // setUp() configured the SDK without debug or environment.
+        val queue = EventQueue()
+        val analytics = analyticsWith(queue)
+        analytics.startForTest()
+
+        analytics.track("tapped")
+
+        val payload = queue.drain().single().payload()
+        assertEquals(false, payload["debug"])
+        assertEquals("production", payload["environment"])
+    }
+
+    @Test
+    fun anEventKeepsTheValuesItWasCreatedWithAcrossAReconfiguration() {
+        Configuration.instance = Configuration(
+            "pk_test", "https://example.invalid", debug = true, environment = "staging",
+        )
+        val queue = EventQueue()
+        val analytics = analyticsWith(queue)
+        analytics.startForTest()
+        analytics.track("queued_under_staging")
+
+        // The app reconfigures before the batch is flushed. The event already
+        // queued must still report the configuration it happened under.
+        Configuration.instance = Configuration(
+            "pk_test", "https://example.invalid", debug = false, environment = "production",
+        )
+        analytics.track("queued_under_production")
+
+        val payloads = queue.drain().map { it.payload() }
+        assertEquals(
+            listOf("queued_under_staging", "queued_under_production"),
+            payloads.map { it["event_name"] },
+        )
+        assertEquals(listOf(true, false), payloads.map { it["debug"] })
+        assertEquals(listOf("staging", "production"), payloads.map { it["environment"] })
+    }
 }

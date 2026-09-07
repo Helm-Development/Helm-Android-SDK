@@ -28,7 +28,7 @@ class DeviceSignalsTest {
     )
 
     @Test
-    fun `match body contains exactly the scored signals plus device id`() {
+    fun `match body contains exactly the scored signals plus device id and debug`() {
         val body = Attribution.buildMatchBody(signals(), "device-abc")
 
         assertEquals(
@@ -40,6 +40,9 @@ class DeviceSignalsTest {
                 "locale",
                 "os_version",
                 "device_id",
+                // HELM-242: not a scored signal. It tells the backend whether
+                // this match came from a debug build.
+                "debug",
             ),
             body.keys,
         )

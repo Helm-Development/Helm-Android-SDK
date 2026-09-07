@@ -143,11 +143,18 @@ class Analytics internal constructor(
             Log.w(TAG, "track(\"$name\") before start() — dropped")
             return
         }
+        // HELM-242: debug and environment are read here, when the event is
+        // created, not when the batch is flushed. An event queued under one
+        // configuration keeps its own values if the app is reconfigured before
+        // the flush.
+        val config = Configuration.instance
         val event = AnalyticsEvent(
             eventName = name,
             occurredAtMs = System.currentTimeMillis(),
             sessionId = sessionManager.sessionId,
             properties = properties,
+            debug = config?.debug ?: false,
+            environment = config?.environment ?: "production",
         )
         if (queue.enqueue(event)) flush()
     }

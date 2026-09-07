@@ -32,9 +32,20 @@ object Helm {
      *   link, status, transaction) as sandbox test data in Helm; sandbox data is
      *   always excluded from payouts. Set it from your build configuration;
      *   default `false` keeps production builds safe.
+     * @param environment a free-form label for the build's deployment
+     *   environment, e.g. `"production"`, `"staging"`, `"development"`. It is
+     *   recorded on every analytics event so activity can be filtered by
+     *   environment. It is independent of [debug]: [debug] controls whether the
+     *   activity counts as real usage at all, while `environment` only says
+     *   which deployment it came from. Default `"production"`.
      */
-    fun configure(publishableKey: String, baseURL: String, debug: Boolean = false) {
-        Configuration.instance = Configuration(publishableKey, baseURL, debug)
+    fun configure(
+        publishableKey: String,
+        baseURL: String,
+        debug: Boolean = false,
+        environment: String = "production",
+    ) {
+        Configuration.instance = Configuration(publishableKey, baseURL, debug, environment)
     }
 
     /**
@@ -60,9 +71,21 @@ object Helm {
      *   default `false` keeps production builds safe. A submission that is
      *   queued offline keeps the value in force when it was made, so a replay
      *   after a build change still reports the environment it came from.
+     * @param environment a free-form label for the build's deployment
+     *   environment, e.g. `"production"`, `"staging"`, `"development"`. It is
+     *   recorded on every analytics event so activity can be filtered by
+     *   environment. It is independent of [debug]: [debug] controls whether the
+     *   activity counts as real usage at all, while `environment` only says
+     *   which deployment it came from. Default `"production"`.
      */
-    fun configure(context: Context, publishableKey: String, baseURL: String, debug: Boolean = false) {
-        Configuration.instance = Configuration(publishableKey, baseURL, debug)
+    fun configure(
+        context: Context,
+        publishableKey: String,
+        baseURL: String,
+        debug: Boolean = false,
+        environment: String = "production",
+    ) {
+        Configuration.instance = Configuration(publishableKey, baseURL, debug, environment)
         Attribution.instance.bind(context)
     }
 
