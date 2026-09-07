@@ -29,6 +29,35 @@ class AnalyticsClientTest {
         assertFalse("locale must be hyphenated", (body["locale"] as String).contains("_"))
     }
 
+    // ---- debug / sandbox marker (HELM-238) ------------------------------
+
+    @Test
+    fun registrationBodyMarksADebugBuild() {
+        val body = AnalyticsClient.registrationBody(
+            installationId = "iid",
+            userHash = "",
+            device = device,
+            debug = true,
+        )
+        assertEquals(
+            "a debug build must register as debug so Helm leaves it out of active-user counts",
+            true, body["debug"],
+        )
+    }
+
+    @Test
+    fun registrationBodyDefaultsToLive() {
+        val body = AnalyticsClient.registrationBody(
+            installationId = "iid",
+            userHash = "",
+            device = device,
+        )
+        assertEquals(
+            "an unconfigured build counts as a real user, matching the server default",
+            false, body["debug"],
+        )
+    }
+
     @Test
     fun registrationBodyIncludesAttributionTokenWhenPresent() {
         val body = AnalyticsClient.registrationBody(
