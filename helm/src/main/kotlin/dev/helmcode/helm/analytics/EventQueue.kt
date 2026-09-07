@@ -16,6 +16,12 @@ private val iso8601 = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).ap
  *
  * @property retried true once this event has survived one failed flush; retried
  * events are dropped rather than re-queued a second time (spec §6).
+ * @property debug HELM-242: the `debug` flag in force when this event was
+ * created, not when the batch is flushed. An event queued by a debug build stays
+ * debug even if the app is reconfigured before the flush -- the same rule
+ * TAS-801 applies to queued attribution submissions.
+ * @property environment HELM-242: the `environment` label in force when this
+ * event was created, captured for the same reason as [debug].
  */
 internal data class AnalyticsEvent(
     val eventName: String,
@@ -23,6 +29,8 @@ internal data class AnalyticsEvent(
     val sessionId: String,
     val properties: Map<String, Any?> = emptyMap(),
     val retried: Boolean = false,
+    val debug: Boolean = false,
+    val environment: String = "production",
 ) {
     /** The JSON shape POST /api/v1/analytics/events/ expects per event. */
     fun payload(): Map<String, Any?> = mapOf(
@@ -30,6 +38,8 @@ internal data class AnalyticsEvent(
         "occurred_at" to synchronized(iso8601) { iso8601.format(Date(occurredAtMs)) },
         "session_id" to sessionId,
         "properties" to properties,
+        "debug" to debug,
+        "environment" to environment,
     )
 }
 

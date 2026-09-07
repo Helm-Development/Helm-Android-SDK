@@ -46,6 +46,9 @@ import kotlinx.coroutines.launch
  * test data in Helm and are excluded from every payout and billing figure. A
  * submission queued while offline replays with the marker it was **made** under,
  * so relabelling cannot happen across a build change.
+ *
+ * As of HELM-242 the older [match] and [increment] requests send `debug` too, so
+ * every attribution request this SDK makes carries it.
  */
 class Attribution internal constructor() {
 
@@ -72,9 +75,41 @@ class Attribution internal constructor() {
          * Deliberately contains no "ip" or "user_agent" -- the backend does not
          * score either, and the IP lookup was an external round trip whose
          * failure aborted the whole match.
+         *
+         * HELM-242: `debug` is always present, as a real JSON boolean, the same
+         * way the three influencer endpoints send it. `environment` is not sent
+         * here -- it is an analytics-only field.
          */
-        internal fun buildMatchBody(signals: DeviceSignals, deviceId: String): Map<String, Any?> =
-            signals.toMap() + mapOf("device_id" to deviceId)
+        internal fun buildMatchBody(
+            signals: DeviceSignals,
+            deviceId: String,
+            debug: Boolean = false,
+        ): Map<String, Any?> =
+            signals.toMap() + mapOf("device_id" to deviceId, "debug" to debug)
+
+        /**
+         * Build the POST body for [PATH_EVENT]: the conversion event type, the
+         * attribution it belongs to, and any caller metadata.
+         *
+         * `attribution_id` is always present and may be null -- an unmatched
+         * install still reports its conversions. `metadata` is omitted when the
+         * caller passes none.
+         *
+         * HELM-242: `debug` is always present, as a real JSON boolean, the same
+         * way the three influencer endpoints send it. `environment` is not sent
+         * here -- it is an analytics-only field.
+         */
+        internal fun buildEventBody(
+            eventType: String,
+            metadata: Map<String, Any>?,
+            attributionId: String?,
+            debug: Boolean = false,
+        ): Map<String, Any?> = buildMap {
+            put("event_type", eventType)
+            put("debug", debug)
+            if (metadata != null) put("metadata", metadata)
+            put("attribution_id", attributionId)
+        }
     }
 
     /**
@@ -358,7 +393,7 @@ class Attribution internal constructor() {
         // Only the six signals the backend actually scores are sent. IP and
         // user agent are NOT scored server-side (Safari clicks over IPv6, the
         // SDK over IPv4), so sending them scored 0 and never matched.
-        val body = buildMatchBody(DeviceSignals.collect(context), deviceId)
+        val body = buildMatchBody(DeviceSignals.collect(context), deviceId, AttributionApi.currentDebug())
 
         val response = HelmHttpClient.post(PATH_MATCH, body)
         val attributionId = response["attribution_id"] as? String
@@ -375,14 +410,6 @@ class Attribution internal constructor() {
         eventType: String,
         metadata: Map<String, Any>?
     ) {
-        val body = mutableMapOf<String, Any?>(
-            "event_type" to eventType
-        )
-
-        if (metadata != null) {
-            body["metadata"] = metadata
-        }
-
         // Read attribution ID from store if context is available
         val ctx = appContext
         val attributionId = if (ctx != null) {
@@ -390,7 +417,13 @@ class Attribution internal constructor() {
         } else {
             null
         }
-        body["attribution_id"] = attributionId
+
+        val body = buildEventBody(
+            eventType = eventType,
+            metadata = metadata,
+            attributionId = attributionId,
+            debug = AttributionApi.currentDebug(),
+        )
 
         HelmHttpClient.post(PATH_EVENT, body)
     }

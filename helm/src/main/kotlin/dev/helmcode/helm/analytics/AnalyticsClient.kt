@@ -49,6 +49,7 @@ internal object AnalyticsClient {
         device: DeviceFacts,
         attributionToken: String? = null,
         debug: Boolean = false,
+        environment: String = "production",
     ): Map<String, Any?> = buildMap {
         put("installation_id", installationId)
         put("platform", device.platform)
@@ -62,6 +63,11 @@ internal object AnalyticsClient {
         // active-user counts. Always sent, including when false, so a device that
         // moves from a debug build to a shipped one counts as live again.
         put("debug", debug)
+        // HELM-242: the deployment environment this build was configured with.
+        // Sent alongside `debug` but separate from it: `debug` says whether the
+        // activity counts as real usage, `environment` only says which
+        // deployment it came from.
+        put("environment", environment)
         attributionToken?.takeIf { it.isNotEmpty() }?.let { put("attribution_token", it) }
     }
 
@@ -76,7 +82,8 @@ internal object AnalyticsClient {
      * Register (or re-register) this installation. userHash may be "" when anonymous;
      * the SDK always echoes its stored hash so identity never regresses (spec §5).
      * The configured `debug` flag rides along so Helm can tell a developer's build
-     * apart from a real user (HELM-238).
+     * apart from a real user (HELM-238), and the configured `environment` label
+     * so activity can be filtered by deployment (HELM-242).
      */
     suspend fun registerInstallation(
         installationId: String,
@@ -92,6 +99,7 @@ internal object AnalyticsClient {
                 device,
                 attributionToken,
                 debug = Configuration.instance?.debug ?: false,
+                environment = Configuration.instance?.environment ?: "production",
             ),
         )
     }
