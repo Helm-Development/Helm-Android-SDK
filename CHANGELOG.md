@@ -4,6 +4,27 @@ All notable changes to the Helm Android SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-25
+
+### Added
+- HELM-311: `Helm.submitFeedback(...)` sends feedback from a user of your app to
+  Helm: a type (`FeedbackType.BUG_REPORT`, `FEATURE_REQUEST` or `FEEDBACK`), a
+  message, an optional image, and an optional user ID and email. Project members
+  read it on the User Feedback page in the Helm dashboard. It is a `suspend`
+  function that returns `HelmResult<SubmittedFeedback>` with the feedback's ID,
+  status and creation time, or a `HelmResult.Failure` with the server's error
+  code. There is no offline queue; the app gets the result directly.
+- Three overloads for the image: raw bytes with a MIME type, an
+  `android.graphics.Bitmap` (encoded as JPEG, and re-encoded at a lower quality
+  and then downscaled if it is over 10 MB), and a content `Uri` (read through
+  the `ContentResolver`, which supplies the MIME type).
+- The SDK checks the message (not empty after trimming, at most 5000
+  characters) and the image size (at most 10 MB) before sending, and adds the
+  platform, app version, Android version and device model itself. Feedback from
+  a build configured with `debug = true` is marked as test data.
+
+Additive only: no existing API changed.
+
 ## [1.0.0] - 2026-09-07
 
 The SDK leaves alpha. There is no functional change from 0.7.0 — the code is
@@ -57,6 +78,7 @@ and a build that sets neither still reports `debug: false` and
   payouts. Defaults to `false`. A submission queued offline replays with the
   marker it was made under.
 
+[1.1.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/1.0.0...1.1.0
 [1.0.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.7.0...1.0.0
 [0.7.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/Helm-Development/Helm-Android-SDK/compare/0.5.0...0.6.0

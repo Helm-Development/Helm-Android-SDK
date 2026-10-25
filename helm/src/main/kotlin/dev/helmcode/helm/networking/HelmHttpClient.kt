@@ -20,6 +20,12 @@ internal object HelmHttpClient {
     private const val READ_TIMEOUT_MS = 15_000
 
     /**
+     * Read timeout for uploads. The server may take a while to check and store
+     * an image of up to 10 MB before it answers.
+     */
+    private const val UPLOAD_READ_TIMEOUT_MS = 60_000
+
+    /**
      * Perform a POST request to the Helm API.
      *
      * @param path The API path (e.g. "/attribution/match/")
@@ -27,7 +33,49 @@ internal object HelmHttpClient {
      * @return The parsed JSON response as a Map.
      * @throws HelmError on any failure.
      */
-    suspend fun post(path: String, body: Map<String, Any?>): Map<String, Any?> = withContext(Dispatchers.IO) {
+    suspend fun post(path: String, body: Map<String, Any?>): Map<String, Any?> =
+        execute(path, READ_TIMEOUT_MS) { connection ->
+            connection.setRequestProperty("Content-Type", "application/json")
+
+            // Write request body
+            val jsonBody = JSONObject(body).toString()
+            val writer = OutputStreamWriter(connection.outputStream)
+            writer.write(jsonBody)
+            writer.flush()
+            writer.close()
+        }
+
+    /**
+     * Perform a `multipart/form-data` POST request to the Helm API.
+     *
+     * Authenticated and answered exactly like [post]; only the body differs.
+     *
+     * @param path The API path (e.g. "/api/client/v1/feedback/")
+     * @param form The form fields and optional file to send.
+     * @return The parsed JSON response as a Map.
+     * @throws HelmError on any failure.
+     */
+    suspend fun postMultipart(path: String, form: MultipartFormData): Map<String, Any?> =
+        execute(path, UPLOAD_READ_TIMEOUT_MS) { connection ->
+            connection.setRequestProperty("Content-Type", form.contentType)
+            // Deliberately not setFixedLengthStreamingMode: in streaming mode
+            // HttpURLConnection cannot handle a 401 itself and drops the error
+            // body, which hides the server's auth_required / invalid_token code.
+            connection.outputStream.use { it.write(form.toByteArray()) }
+        }
+
+    /**
+     * Opens an authenticated POST connection to [path], lets [writeBody] set
+     * the content type and write the body, and reads the JSON response.
+     *
+     * A 2xx response is parsed as a JSON object; any other status throws
+     * [HelmError.ServerError] with the raw response body as its message.
+     */
+    private suspend fun execute(
+        path: String,
+        readTimeoutMs: Int,
+        writeBody: (HttpURLConnection) -> Unit,
+    ): Map<String, Any?> = withContext(Dispatchers.IO) {
         val config = Configuration.instance
             ?: throw HelmError.NotConfigured
 
@@ -44,17 +92,11 @@ internal object HelmHttpClient {
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
+            connection.readTimeout = readTimeoutMs
             connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Authorization", "Bearer ${config.publishableKey}")
 
-            // Write request body
-            val jsonBody = JSONObject(body).toString()
-            val writer = OutputStreamWriter(connection.outputStream)
-            writer.write(jsonBody)
-            writer.flush()
-            writer.close()
+            writeBody(connection)
 
             val responseCode = connection.responseCode
 
