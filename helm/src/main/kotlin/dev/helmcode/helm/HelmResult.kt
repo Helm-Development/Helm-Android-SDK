@@ -1,10 +1,12 @@
 package dev.helmcode.helm
 
 /**
- * Outcome of a Helm attribution call.
+ * Outcome of a Helm attribution or feedback call.
  *
  * The SDK never throws out of its public attribution surface: every network,
  * parsing, and configuration failure is mapped onto one of these cases.
+ * [dev.helmcode.helm.Helm.submitFeedback] follows the same rule and lists its
+ * own failure codes.
  */
 sealed class HelmResult<out T> {
 
